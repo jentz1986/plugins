@@ -24,7 +24,9 @@ class DeviceCacheEntry(object):
         self.data = {}
         self.valid = False
 
-
+UNIFI_URL_FLAVOR_DEFAULT = 1
+UNIFI_URL_FLAVOR_CLOUDKEY = 2
+        
 class API(object):
     """
     Unifi API for the Unifi Controller.
@@ -58,6 +60,7 @@ class API(object):
         self._baseurl = baseurl
         self._session = Session()
         self._request_count = 0
+        self._url_flavor = UNIFI_URL_FLAVOR_DEFAULT
 
     def __enter__(self):
         """
@@ -76,6 +79,17 @@ class API(object):
         if self._is_logged_in:
             self.logout()
             self._is_logged_in = False
+    
+    def _build_login_out_url(self, in_out):
+        if self._url_flavor == UNIFI_URL_FLAVOR_CLOUDKEY:
+            return "{}/api/auth/{}".format(self._baseurl, in_out)
+        return "{}/api/{}".format(self._baseurl, in_out)
+    
+    def _build_api_url(self, sub_path):
+        if self._url_flavor == UNIFI_URL_FLAVOR_CLOUDKEY:
+            return "{}/proxy/network/api/s/{}/{}".format(self._baseurl, self._site, sub_path)
+        return "{}/api/s/{}/{}".format(self._baseurl, self._site, sub_path)
+        
 
     def _get_url(self, url, recursion=False):
         try:
@@ -126,9 +140,8 @@ class API(object):
         """
         if self._is_logged_in:
             return
-
-        current_status_code = self._session.post("{}/api/login".format(
-            self._baseurl), data=json.dumps(self._login_data), verify=self._verify_ssl).status_code
+        url_addr = self._build_login_out_url("login")
+        current_status_code = self._session.post(url_addr, data=json.dumps(self._login_data), verify=self._verify_ssl).status_code
         self._request_count = self._request_count + 1
         if current_status_code == 400:
             raise LoggedInException("Failed to log in to api with provided credentials")
@@ -141,7 +154,8 @@ class API(object):
 
         :return: None
         """
-        self._session.get("{}/logout".format(self._baseurl))
+        url_addr = self._build_login_out_url("logout")
+        self._session.get(url_addr)
         self._request_count = self._request_count + 1
         self._session.close()
 
@@ -155,8 +169,8 @@ class API(object):
         :return: A list of clients on the format of a dict
         """
         if time.time() - self._client_list_from > max_age_seconds:
-            self._client_list = self._get_url("{}/api/s/{}/stat/sta".format(self._baseurl,
-                                                                            self._site))
+            url_addr = self._build_api_url("stat/sta")
+            self._client_list = self._get_url(url_addr)
             self._client_list_from = time.time()
 
         data = self._client_list
@@ -181,12 +195,12 @@ class API(object):
         ap_data = {}
         ap_data['disabled'] = disabled
         for ids in device_ids:
-            self._put_url("{}/api/s/{}/rest/device/{}".format(
-                self._baseurl, self._site, ids), body=json.dumps(ap_data))
+            url_addr = self._build_api_url("rest/device/{}".format(ids))
+            self._put_url(url_addr, body=json.dumps(ap_data))
 
     def device_stat(self, mac: str):
-        return self._get_url("{}/api/s/{}/stat/device/{}".format(self._baseurl,
-                                                                 self._site, mac))
+        url_addr = self._build_api_url("stat/device/{}".format(mac))
+        return self._get_url(url_addr)
 
     def hierarchize(self, inventory, key_selector, subkey_selector, start_key):
         to_ret = []
@@ -268,7 +282,8 @@ class API(object):
 
     def _get_port_profiles(self, filters: Dict[str, Union[str, Pattern]] = None):
         if len(self._port_profiles) < 1:
-            self._port_profiles = self._get_url("{}/api/s/{}/rest/portconf".format(self._baseurl, self._site))
+            url_addr = self._build_api_url("rest/portconf")
+            self._port_profiles = self._get_url(url_addr)
 
         data = self._port_profiles
         if filters:
@@ -348,9 +363,8 @@ class API(object):
         poData[poIndex]['portconf_id'] = pid
         newPoData = {}
         newPoData['port_overrides'] = poData
-
-        self._put_url("{}/api/s/{}/rest/device/{}".format(self._baseurl,
-                                                          self._site, sid), body=json.dumps(newPoData))
+        url_addr = self._build_api_url("rest/device/{}".format(sid))
+        self._put_url(url_addr, body=json.dumps(newPoData))
 
     def get_client_presence(self, client_mac: str, last_seen_delta: int = 300):
         clnts = self.list_clients(filters={'mac': client_mac})
